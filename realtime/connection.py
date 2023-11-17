@@ -1,11 +1,10 @@
 import asyncio
-import json
 import logging
 from collections import defaultdict
 from functools import wraps
-from typing import Any, Callable, List, Dict, TypeVar, DefaultDict
+from typing import Any, Callable, List, Dict, TypeVar, DefaultDict, Union
 
-import websockets
+import aiohttp
 from typing_extensions import ParamSpec
 
 from realtime.channel import Channel
@@ -19,94 +18,119 @@ T_ParamSpec = ParamSpec("T_ParamSpec")
 logging.basicConfig(
     format="%(asctime)s:%(levelname)s - %(message)s", level=logging.INFO)
 
+
 def ensure_connection(func: Callable[T_ParamSpec, T_Retval]):
     @wraps(func)
-    def wrapper(*args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs) -> T_Retval:
+    async def wrapper(*args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs) -> T_Retval:
         if not args[0].connected:
             raise NotConnectedError(func.__name__)
 
-        return func(*args, **kwargs)
+        return await func(*args, **kwargs)
 
     return wrapper
 
 
 class Socket:
-    def __init__(self, url: str, auto_reconnect: bool = False, params: Dict[str, Any] = {}, hb_interval: int = 5) -> None:
+    def __init__(self, url: str, auto_reconnect: bool = True, params=None, hb_interval: int = 10) -> None:
         """
         `Socket` is the abstraction for an actual socket connection that receives and 'reroutes' `Message` according to its `topic` and `event`.
         Socket-Channel has a 1-many relationship.
         Socket-Topic has a 1-many relationship.
         :param url: Websocket URL of the Realtime server. starts with `ws://` or `wss://`
         :param params: Optional parameters for connection.
-        :param hb_interval: WS connection is kept alive by sending a heartbeat message. Optional, defaults to 5.
+        :param hb_interval: WS connection is kept alive by sending a heartbeat message. Optional, defaults to 30.
         """
+        if params is None:
+            params = {}
         self.url = url
-        self.channels = defaultdict(list)
+        self.channels: DefaultDict[str, List[Channel]] = defaultdict(list)
         self.connected = False
         self.params = params
         self.hb_interval = hb_interval
-        self.ws_connection: websockets.client.WebSocketClientProtocol
-        self.kept_alive = False
+        self.ws_connection: aiohttp.ClientWebSocketResponse = Union[Any, None]
         self.auto_reconnect = auto_reconnect
+        self.logger = logging.getLogger("Socket")
+        self.session: aiohttp.ClientSession = Union[Any, None]
+        self.listen_task = None
+        self.keep_alive_task = None
 
-        self.channels: DefaultDict[str, List[Channel]] = defaultdict(list)
+    async def connect(self) -> None:
+        """
+        Establishes the websocket connection.
+        """
+        self.session = aiohttp.ClientSession()
+        try:
+            self.ws_connection = await self.session.ws_connect(self.url)
+            self.connected = True
+            self.listen_task = asyncio.create_task(self._listen())
+            self.keep_alive_task = asyncio.create_task(self._keep_alive())
+        except Exception as e:
+            self.logger.error(f"Error connecting to WebSocket: {e}")
+            await self.session.close()
+            raise
+
+    async def shutdown(self) -> None:
+        # Cancel the listen and keep-alive tasks
+        if self.listen_task:
+            self.listen_task.cancel()
+            try:
+                await self.listen_task
+            except asyncio.CancelledError:
+                self.logger.info("Listen task cancelled.")
+        if self.keep_alive_task:
+            self.keep_alive_task.cancel()
+            try:
+                await self.keep_alive_task
+            except asyncio.CancelledError:
+                self.logger.info("Keep-alive task cancelled.")
+
+        # Close the WebSocket connection
+        if self.ws_connection:
+            await self.ws_connection.close()
+            self.logger.info("WebSocket connection closed.")
+
+        # Close the aiohttp session
+        if self.session:
+            await self.session.close()
+            self.logger.info("HTTP session closed.")
+
+        self.connected = False
 
     @ensure_connection
-    def listen(self) -> None:
-        """
-        Wrapper for async def _listen() to expose a non-async interface
-        In most cases, this should be the last method executed as it starts an infinite listening loop.
-        :return: None
-        """
-        loop = asyncio.get_event_loop()  # TODO: replace with get_running_loop
-        loop.run_until_complete(asyncio.gather(
-            self._listen(), self._keep_alive()))
-
     async def _listen(self) -> None:
         """
         An infinite loop that keeps listening.
         :return: None
         """
-        while True:
-            try:
-                msg = await self.ws_connection.recv()
-                msg = Message(**json.loads(msg))
-
-                if msg.event == ChannelEvents.reply:
+        async def listen_to_messages():
+            while True:
+                if self.ws_connection is None:
+                    await asyncio.sleep(1)  # Wait a bit before trying to reconnect or handle the lack of connection
                     continue
 
-                for channel in self.channels.get(msg.topic, []):
-                    for cl in channel.listeners:
-                        if cl.event in ["*", msg.event]:
-                            cl.callback(msg.payload)
-            except websockets.exceptions.ConnectionClosed:
-                if self.auto_reconnect:
-                    logging.info("Connection with server closed, trying to reconnect...")
-                    await self._connect()
-                    for topic, channels in self.channels.items():
-                        for channel in channels:
-                            await channel._join()
-                else:
-                    logging.exception("Connection with the server closed.")
-                    break
+                try:
+                    msg = await self.ws_connection.receive_json()
+                    msg = Message(**msg)
 
-    def connect(self) -> None:
-        """
-        Wrapper for async def _connect() to expose a non-async interface
-        """
-        loop = asyncio.get_event_loop()  # TODO: replace with get_running
-        loop.run_until_complete(self._connect())
-        self.connected = True
+                    if msg.event == ChannelEvents.reply:
+                        continue
 
-    async def _connect(self) -> None:
-        ws_connection = await websockets.connect(self.url)
+                    for channel in self.channels.get(msg.topic, []):
+                        if channel.joined:
+                            for cl in channel.listeners:
+                                if cl.event in ["*", msg.event]:
+                                    await cl.callback(msg.payload)
+                except Exception as e:
+                    self.logger.error(f"Error receiving message: {e}")
+                    if self.auto_reconnect:
+                        self.logger.info("Connection with server closed, trying to reconnect...")
+                        await asyncio.sleep(2)
+                        await self.connect()
+                    else:
+                        self.logger.exception("Connection with the server closed.")
+                        break
 
-        if ws_connection.open:
-            logging.info("Connection was successful")
-            self.ws_connection = ws_connection
-            self.connected = True
-        else:
-            raise Exception("Connection Failed")
+        await listen_to_messages()
 
     async def _keep_alive(self) -> None:
         """
@@ -115,32 +139,43 @@ class Socket:
         """
         while True:
             try:
-                data = dict(
-                    topic=PHOENIX_CHANNEL,
-                    event=ChannelEvents.heartbeat,
-                    payload=HEARTBEAT_PAYLOAD,
-                    ref=None,
-                )
-                await self.ws_connection.send(json.dumps(data))
+                if self.ws_connection:
+                    await self.ws_connection.send_json({
+                        "topic": PHOENIX_CHANNEL,
+                        "event": ChannelEvents.heartbeat,
+                        "payload": HEARTBEAT_PAYLOAD,
+                        "ref": None,
+                    })
                 await asyncio.sleep(self.hb_interval)
-            except websockets.exceptions.ConnectionClosed:
+            except Exception as e:
+                self.logger.error(f"Error sending heartbeat: {e}")
                 if self.auto_reconnect:
-                    logging.info("Connection with server closed, trying to reconnect...")
-                    await self._connect()
+                    self.logger.info("Connection with server closed, trying to reconnect...")
+                    await self.connect()
                 else:
-                    logging.exception("Connection with the server closed.")
+                    self.logger.exception("Connection with the server closed.")
                     break
 
     @ensure_connection
-    def set_channel(self, topic: str) -> Channel:
+    async def set_channel(self, topic: str) -> Channel:
         """
         :param topic: Initializes a channel and creates a two-way association with the socket
         :return: Channel
         """
         chan = Channel(self, topic, self.params)
         self.channels[topic].append(chan)
-
+        await chan.join()
         return chan
+
+    async def close(self) -> None:
+        """
+        Closes the WebSocket connection and the aiohttp session.
+        """
+        if self.ws_connection:
+            await self.ws_connection.close()
+        if self.session:
+            await self.session.close()
+        self.connected = False
 
     def summary(self) -> None:
         """
@@ -150,4 +185,4 @@ class Socket:
         for topic, chans in self.channels.items():
             for chan in chans:
                 print(
-                    f"Topic: {topic} | Events: {[e for e, _ in chan.callbacks]}]")
+                    f"Topic: {topic} | Events: {[e.event for e in chan.listeners]}")

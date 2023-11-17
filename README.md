@@ -1,4 +1,8 @@
-# realtime-py
+# aiorealtime
+This is a port of realtime-py to asyncio using aiohttp. I don't have time to document right now. Maybe later.
+Expect bugs, and feel free to help me fix them.
+
+# original realtime-py readme
 Python Client Library to interface with the Phoenix Realtime Server 
 
 ## Requirements

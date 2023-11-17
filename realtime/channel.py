@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-import json
-from typing import Any, List, Dict, TYPE_CHECKING, NamedTuple
+from typing import List, TYPE_CHECKING, NamedTuple
 
 from realtime.types import Callback
 
@@ -24,41 +22,33 @@ class Channel:
     Topic-Channel has a 1-many relationship.
     """
 
-    def __init__(self, socket: Socket, topic: str, params: Dict[str, Any] = {}) -> None:
+    def __init__(self, socket: Socket, topic: str, params=None) -> None:
         """
         :param socket: Socket object
         :param topic: Topic that it subscribes to on the realtime server
         :param params:
         """
+        if params is None:
+            params = {}
         self.socket = socket
         self.params = params
         self.topic = topic
         self.listeners: List[CallbackListener] = []
         self.joined = False
 
-    def join(self) -> Channel:
-        """
-        Wrapper for async def _join() to expose a non-async interface
-        Essentially gets the only event loop and attempt joining a topic
-        :return: Channel
-        """
-        loop = asyncio.get_event_loop()  # TODO: replace with get_running_loop
-        loop.run_until_complete(self._join())
-        return self
-
-    async def _join(self) -> None:
+    async def join(self) -> 'Channel':
         """
         Coroutine that attempts to join Phoenix Realtime server via a certain topic
         :return: None
         """
-        join_req = dict(topic=self.topic, event="phx_join",
-                        payload={}, ref=None)
-
+        join_req = {"topic": self.topic, "event": "phx_join", "payload": {}, "ref": None}
         try:
-            await self.socket.ws_connection.send(json.dumps(join_req))
+            await self.socket.ws_connection.send_json(join_req)
+            self.joined = True
+            return self  # Return the Channel instance to allow chaining
         except Exception as e:
-            print(str(e))  # TODO: better error propagation
-            return
+            self.socket.logger.error(f"Error joining channel '{self.topic}': {e}")
+            raise
 
     def on(self, event: str, callback: Callback) -> Channel:
         """
@@ -75,5 +65,4 @@ class Channel:
         :param event: Stop responding to a certain event
         :return: None
         """
-        self.listeners = [
-            callback for callback in self.listeners if callback.event != event]
+        self.listeners = [callback for callback in self.listeners if callback.event != event]
