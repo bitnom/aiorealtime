@@ -53,21 +53,27 @@ class Socket:
         self.session: aiohttp.ClientSession = Union[Any, None]
         self.listen_task = None
         self.keep_alive_task = None
+        self.reconnect_lock = asyncio.Lock()
 
     async def connect(self) -> None:
-        """
-        Establishes the websocket connection.
-        """
-        self.session = aiohttp.ClientSession()
-        try:
-            self.ws_connection = await self.session.ws_connect(self.url)
-            self.connected = True
-            self.listen_task = asyncio.create_task(self._listen())
-            self.keep_alive_task = asyncio.create_task(self._keep_alive())
-        except Exception as e:
-            self.logger.error(f"Error connecting to WebSocket: {e}")
-            await self.session.close()
-            raise
+        async with self.reconnect_lock:
+            if self.connected:
+                return  # Already connected, no need to connect again
+
+            self.session = aiohttp.ClientSession()
+            try:
+                self.ws_connection = await self.session.ws_connect(self.url)
+                self.connected = True
+                if self.listen_task:
+                    self.listen_task.cancel()
+                self.listen_task = asyncio.create_task(self._listen())
+                if self.keep_alive_task:
+                    self.keep_alive_task.cancel()
+                self.keep_alive_task = asyncio.create_task(self._keep_alive())
+            except Exception as e:
+                self.logger.error(f"Error connecting to WebSocket: {e}")
+                await self.session.close()
+                raise
 
     async def shutdown(self) -> None:
         # Cancel the listen and keep-alive tasks
@@ -122,6 +128,7 @@ class Socket:
                                     await cl.callback(msg.payload)
                 except Exception as e:
                     self.logger.error(f"Error receiving message: {e}")
+                    await self.close()
                     if self.auto_reconnect:
                         self.logger.info("Connection with server closed, trying to reconnect...")
                         await asyncio.sleep(2)
@@ -149,6 +156,7 @@ class Socket:
                 await asyncio.sleep(self.hb_interval)
             except Exception as e:
                 self.logger.error(f"Error sending heartbeat: {e}")
+                await self.close()
                 if self.auto_reconnect:
                     self.logger.info("Connection with server closed, trying to reconnect...")
                     await self.connect()
@@ -168,13 +176,12 @@ class Socket:
         return chan
 
     async def close(self) -> None:
-        """
-        Closes the WebSocket connection and the aiohttp session.
-        """
-        if self.ws_connection:
+        if self.ws_connection and not self.ws_connection.closed:
             await self.ws_connection.close()
-        if self.session:
+            self.ws_connection = None
+        if self.session and not self.session.closed:
             await self.session.close()
+            self.session = None
         self.connected = False
 
     def summary(self) -> None:
