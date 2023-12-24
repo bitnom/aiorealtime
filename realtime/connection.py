@@ -74,8 +74,10 @@ class Socket:
                                                                    receive_timeout=self.timeout_float)
                 self.connected = True
                 self.logger.info('Realtime reconnected')
-                self.listen_task = asyncio.create_task(self._listen())
-                self.keep_alive_task = asyncio.create_task(self._keep_alive())
+                if self.listen_task is None or self.listen_task.done():
+                    self.listen_task = asyncio.create_task(self._listen())
+                if self.keep_alive_task is None or self.keep_alive_task.done():
+                    self.keep_alive_task = asyncio.create_task(self._keep_alive())
             except Exception as e:
                 self.logger.error(f"Error connecting to WebSocket: {e}")
                 await self.shutdown()
@@ -117,21 +119,25 @@ class Socket:
                     continue
 
                 try:
-                    msg = await self.ws_connection.receive_json()
-                    if not isinstance(msg, dict) or 'event' not in msg:
-                        self.logger.error(f"Received invalid message format: {msg}")
-                        continue
+                    msg = await self.ws_connection.receive()
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        data = msg.json()
+                        if not isinstance(data, dict) or 'event' not in data:
+                            self.logger.error(f"Received invalid message format: {data}")
+                            continue
 
-                    msg = Message(**msg)
+                        message = Message(**data)
 
-                    if msg.event == ChannelEvents.reply:
-                        continue
+                        if message.event == ChannelEvents.reply:
+                            continue
 
-                    for channel in self.channels.get(msg.topic, []):
-                        if channel.joined:
-                            for cl in channel.listeners:
-                                if cl.event in ["*", msg.event]:
-                                    await cl.callback(msg.payload)
+                        for channel in self.channels.get(message.topic, []):
+                            if channel.joined:
+                                for cl in channel.listeners:
+                                    if cl.event in ["*", message.event]:
+                                        await cl.callback(message.payload)
+                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        break
                 except Exception as e:
                     self.logger.error(f"Error receiving message: {e}")
                     await self.close()
@@ -152,7 +158,7 @@ class Socket:
         """
         while True:
             async with self.shutdown_lock:
-                self.logger.info('Realtime sending heartbeat...')
+                self.logger.debug('Realtime sending heartbeat...')
                 try:
                     if self.ws_connection:
                         await self.ws_connection.send_json({
@@ -161,6 +167,7 @@ class Socket:
                             "payload": HEARTBEAT_PAYLOAD,
                             "ref": None,
                         })
+                    self.logger.debug('Realtime sent heartbeat')
                     await asyncio.sleep(self.hb_interval)
                 except Exception as e:
                     self.logger.error(f"Error sending heartbeat: {e}")
