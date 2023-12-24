@@ -11,7 +11,6 @@ from realtime.channel import Channel
 from realtime.exceptions import NotConnectedError
 from realtime.message import HEARTBEAT_PAYLOAD, PHOENIX_CHANNEL, ChannelEvents, Message
 
-
 T_Retval = TypeVar("T_Retval")
 T_ParamSpec = ParamSpec("T_ParamSpec")
 
@@ -22,9 +21,10 @@ logging.basicConfig(
 def ensure_connection(func: Callable[T_ParamSpec, T_Retval]):
     @wraps(func)
     async def wrapper(*args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs) -> T_Retval:
-        if not args[0].connected:
-            raise NotConnectedError(func.__name__)
-
+        self = args[0]
+        if not self.connected:
+            self.logger.warning(f"Attempted to call '{func.__name__}' without an active connection.")
+            return  # Optionally, you could raise an exception or handle reconnection here
         return await func(*args, **kwargs)
 
     return wrapper
@@ -54,25 +54,31 @@ class Socket:
         self.listen_task = None
         self.keep_alive_task = None
         self.reconnect_lock = asyncio.Lock()
+        self.timeout = aiohttp.ClientTimeout(total=10)
+        self.timeout_float = 10.0
+        self.shutdown_lock = asyncio.Lock()
 
     async def connect(self) -> None:
+        self.logger.info('Realtime reconnecting...')
         async with self.reconnect_lock:
             if self.connected:
                 return  # Already connected, no need to connect again
 
-            self.session = aiohttp.ClientSession()
+            # Close any existing session and connection before reconnecting
+            async with self.shutdown_lock:
+                await self.shutdown()
+
+            self.session = aiohttp.ClientSession(timeout=self.timeout)
             try:
-                self.ws_connection = await self.session.ws_connect(self.url)
+                self.ws_connection = await self.session.ws_connect(self.url, timeout=self.timeout_float,
+                                                                   receive_timeout=self.timeout_float)
                 self.connected = True
-                if self.listen_task:
-                    self.listen_task.cancel()
+                self.logger.info('Realtime reconnected')
                 self.listen_task = asyncio.create_task(self._listen())
-                if self.keep_alive_task:
-                    self.keep_alive_task.cancel()
                 self.keep_alive_task = asyncio.create_task(self._keep_alive())
             except Exception as e:
                 self.logger.error(f"Error connecting to WebSocket: {e}")
-                await self.session.close()
+                await self.shutdown()
                 raise
 
     async def shutdown(self) -> None:
@@ -91,12 +97,12 @@ class Socket:
                 self.logger.info("Keep-alive task cancelled.")
 
         # Close the WebSocket connection
-        if self.ws_connection:
+        if hasattr(self.ws_connection, 'close'):
             await self.ws_connection.close()
             self.logger.info("WebSocket connection closed.")
 
         # Close the aiohttp session
-        if self.session:
+        if hasattr(self.session, 'close'):
             await self.session.close()
             self.logger.info("HTTP session closed.")
 
@@ -104,18 +110,18 @@ class Socket:
 
     @ensure_connection
     async def _listen(self) -> None:
-        """
-        An infinite loop that keeps listening.
-        :return: None
-        """
         async def listen_to_messages():
-            while True:
+            while self.connected:
                 if self.ws_connection is None:
                     await asyncio.sleep(1)  # Wait a bit before trying to reconnect or handle the lack of connection
                     continue
 
                 try:
                     msg = await self.ws_connection.receive_json()
+                    if not isinstance(msg, dict) or 'event' not in msg:
+                        self.logger.error(f"Received invalid message format: {msg}")
+                        continue
+
                     msg = Message(**msg)
 
                     if msg.event == ChannelEvents.reply:
@@ -145,24 +151,26 @@ class Socket:
         Ping - pong messages to verify connection is alive
         """
         while True:
-            try:
-                if self.ws_connection:
-                    await self.ws_connection.send_json({
-                        "topic": PHOENIX_CHANNEL,
-                        "event": ChannelEvents.heartbeat,
-                        "payload": HEARTBEAT_PAYLOAD,
-                        "ref": None,
-                    })
-                await asyncio.sleep(self.hb_interval)
-            except Exception as e:
-                self.logger.error(f"Error sending heartbeat: {e}")
-                await self.close()
-                if self.auto_reconnect:
-                    self.logger.info("Connection with server closed, trying to reconnect...")
-                    await self.connect()
-                else:
-                    self.logger.exception("Connection with the server closed.")
-                    break
+            async with self.shutdown_lock:
+                self.logger.info('Realtime sending heartbeat...')
+                try:
+                    if self.ws_connection:
+                        await self.ws_connection.send_json({
+                            "topic": PHOENIX_CHANNEL,
+                            "event": ChannelEvents.heartbeat,
+                            "payload": HEARTBEAT_PAYLOAD,
+                            "ref": None,
+                        })
+                    await asyncio.sleep(self.hb_interval)
+                except Exception as e:
+                    self.logger.error(f"Error sending heartbeat: {e}")
+                    await self.close()
+                    if self.auto_reconnect:
+                        self.logger.info("Connection with server closed, trying to reconnect...")
+                        await self.connect()
+                    else:
+                        self.logger.exception("Connection with the server closed.")
+                        break
 
     @ensure_connection
     async def set_channel(self, topic: str) -> Channel:
