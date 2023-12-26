@@ -15,7 +15,7 @@ T_Retval = TypeVar("T_Retval")
 T_ParamSpec = ParamSpec("T_ParamSpec")
 
 logging.basicConfig(
-    format="%(asctime)s:%(levelname)s - %(message)s", level=logging.INFO)
+    format="%(asctime)s:%(levelname)s - %(message)s", level=logging.WARN)
 
 
 def ensure_connection(func: Callable[T_ParamSpec, T_Retval]):
@@ -50,6 +50,7 @@ class Socket:
         self.ws_connection: aiohttp.ClientWebSocketResponse = Union[Any, None]
         self.auto_reconnect = auto_reconnect
         self.logger = logging.getLogger("Socket")
+        self.logger.setLevel(logging.WARN)
         self.session: aiohttp.ClientSession = Union[Any, None]
         self.listen_task = None
         self.keep_alive_task = None
@@ -57,21 +58,23 @@ class Socket:
         self.timeout = aiohttp.ClientTimeout(total=10)
         self.timeout_float = 10.0
         self.shutdown_lock = asyncio.Lock()
+        self.receive_lock = asyncio.Lock()
 
     async def connect(self) -> None:
-        self.logger.info('Realtime reconnecting...')
         async with self.reconnect_lock:
             if self.connected:
                 return  # Already connected, no need to connect again
 
             # Close any existing session and connection before reconnecting
-            async with self.shutdown_lock:
-                await self.shutdown()
+            await self.shutdown()
 
             self.session = aiohttp.ClientSession(timeout=self.timeout)
             try:
-                self.ws_connection = await self.session.ws_connect(self.url, timeout=self.timeout_float,
-                                                                   receive_timeout=self.timeout_float)
+                self.ws_connection = await self.session.ws_connect(
+                    self.url,
+                    timeout=self.timeout_float,
+                    # receive_timeout=self.timeout_float
+                )
                 self.connected = True
                 self.logger.info('Realtime reconnected')
                 if self.listen_task is None or self.listen_task.done():
@@ -84,19 +87,22 @@ class Socket:
                 raise
 
     async def shutdown(self) -> None:
-        # Cancel the listen and keep-alive tasks
-        if self.listen_task:
-            self.listen_task.cancel()
-            try:
-                await self.listen_task
-            except asyncio.CancelledError:
-                self.logger.info("Listen task cancelled.")
-        if self.keep_alive_task:
-            self.keep_alive_task.cancel()
-            try:
-                await self.keep_alive_task
-            except asyncio.CancelledError:
-                self.logger.info("Keep-alive task cancelled.")
+        async with self.shutdown_lock:
+            if self.listen_task and not self.listen_task.done():
+                self.listen_task.cancel()
+                try:
+                    await self.listen_task
+                except asyncio.CancelledError:
+                    self.logger.info("Listen task cancelled.")
+            self.listen_task = None
+
+            if self.keep_alive_task and not self.keep_alive_task.done():
+                self.keep_alive_task.cancel()
+                try:
+                    await self.keep_alive_task
+                except asyncio.CancelledError:
+                    self.logger.info("Keep-alive task cancelled.")
+            self.keep_alive_task = None
 
         # Close the WebSocket connection
         if hasattr(self.ws_connection, 'close'):
@@ -119,7 +125,9 @@ class Socket:
                     continue
 
                 try:
-                    msg = await self.ws_connection.receive()
+                    async with self.receive_lock:
+                        msg = await self.ws_connection.receive()
+                        self.logger.debug(f"Realtime - received: {msg}")
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         data = msg.json()
                         if not isinstance(data, dict) or 'event' not in data:
@@ -138,8 +146,8 @@ class Socket:
                                         await cl.callback(message.payload)
                     elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                         break
-                except Exception as e:
-                    self.logger.error(f"Error receiving message: {e}")
+                except TimeoutError as e:
+                    self.logger.error(f"Realtime - Timeout error receiving message: {e}")
                     await self.close()
                     if self.auto_reconnect:
                         self.logger.info("Connection with server closed, trying to reconnect...")
