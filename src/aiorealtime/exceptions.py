@@ -19,3 +19,7 @@ class ChannelJoinError(Exception):
 
     def __str__(self):
         return f"Failed to join the topic '{self.topic}': {self.message}"
+
+
+class HeartbeatError(Exception):
+    """Raised when a heartbeat ping fails to pong"""

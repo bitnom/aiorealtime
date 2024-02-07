@@ -7,9 +7,9 @@ from typing import Any, Callable, List, Dict, TypeVar, DefaultDict, Union
 import aiohttp
 from typing_extensions import ParamSpec
 
-from realtime.channel import Channel
-from realtime.exceptions import NotConnectedError
-from realtime.message import HEARTBEAT_PAYLOAD, PHOENIX_CHANNEL, ChannelEvents, Message
+from aiorealtime.channel import Channel
+from aiorealtime.exceptions import NotConnectedError
+from aiorealtime.message import HEARTBEAT_PAYLOAD, PHOENIX_CHANNEL, ChannelEvents, Message
 
 T_Retval = TypeVar("T_Retval")
 T_ParamSpec = ParamSpec("T_ParamSpec")
@@ -50,19 +50,21 @@ class Socket:
         self.ws_connection: aiohttp.ClientWebSocketResponse = Union[Any, None]
         self.auto_reconnect = auto_reconnect
         self.logger = logging.getLogger("Socket")
-        self.logger.setLevel(logging.WARN)
+        self.logger.setLevel(logging.DEBUG)
         self.session: aiohttp.ClientSession = Union[Any, None]
         self.listen_task = None
         self.keep_alive_task = None
         self.reconnect_lock = asyncio.Lock()
         self.timeout = aiohttp.ClientTimeout(total=10)
-        self.timeout_float = 10.0
+        self.timeout_float = 5.0
         self.shutdown_lock = asyncio.Lock()
         self.receive_lock = asyncio.Lock()
+        self.keep_alive_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         async with self.reconnect_lock:
             if self.connected:
+                self.logger.warning("Ran connect() but self.connected is True. returning")
                 return  # Already connected, no need to connect again
 
             # Close any existing session and connection before reconnecting
@@ -161,12 +163,12 @@ class Socket:
 
     async def _keep_alive(self) -> None:
         """
-        Sending heartbeat to server every 5 seconds
+        Sending heartbeat to server
         Ping - pong messages to verify connection is alive
         """
         while True:
-            async with self.shutdown_lock:
-                self.logger.debug('Realtime sending heartbeat...')
+            async with self.keep_alive_lock:
+                self.logger.info('Realtime sending heartbeat...')
                 try:
                     if self.ws_connection:
                         await self.ws_connection.send_json({

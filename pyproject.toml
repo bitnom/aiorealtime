@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "realtime"
+name = "aiorealtime"
 version = "1.0.0"
 description = ""
 authors = ["bitnom"]
@@ -14,6 +14,36 @@ aiohttp = {extras = ["speed"], version = "^3.8.6"}
 [tool.poetry.dev-dependencies]
 pytest = "^7.2.0"
 
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "pytest<8.0.0,>=7.2.0",
+]
+
+[tool.pdm.build]
+includes = []
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[project]
+name = "aiorealtime"
+version = "1.0.0"
+description = ""
+authors = [
+    {name = "bitnom", email = "14287229+bitnom@users.noreply.github.com"},
+    {name = "bitnom"},
+]
+dependencies = [
+    "python-dateutil<3.0.0,>=2.8.1",
+    "typing-extensions<5.0.0,>=4.2.0",
+    "aiohttp[speed]<4.0.0,>=3.8.6",
+]
+requires-python = ">=3.8,<4.0"
+readme = "README.md"
+license = {text = "MIT"}
+

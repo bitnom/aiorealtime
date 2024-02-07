@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import List, TYPE_CHECKING, NamedTuple
 
-from realtime.types import Callback
+from aiorealtime.types import Callback
 
 if TYPE_CHECKING:
-    from realtime.connection import Socket
+    from aiorealtime.connection import Socket
 
 
 class CallbackListener(NamedTuple):
