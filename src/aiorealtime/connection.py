@@ -31,7 +31,7 @@ def ensure_connection(func: Callable[T_ParamSpec, T_Retval]):
 
 
 class Socket:
-    def __init__(self, url: str, auto_reconnect: bool = True, params=None, hb_interval: int = 10) -> None:
+    def __init__(self, url: str, auto_reconnect: bool = True, params=None, hb_interval: int = 10, logger: logging.Logger = None) -> None:
         """
         `Socket` is the abstraction for an actual socket connection that receives and 'reroutes' `Message` according to its `topic` and `event`.
         Socket-Channel has a 1-many relationship.
@@ -49,8 +49,11 @@ class Socket:
         self.hb_interval = hb_interval
         self.ws_connection: aiohttp.ClientWebSocketResponse = Union[Any, None]
         self.auto_reconnect = auto_reconnect
-        self.logger = logging.getLogger("Socket")
-        self.logger.setLevel(logging.DEBUG)
+        if logger is not None:
+            self.logger = logger
+        else:
+            self.logger = logging.getLogger("Socket")
+            self.logger.setLevel(logging.DEBUG)
         self.session: aiohttp.ClientSession = Union[Any, None]
         self.listen_task = None
         self.keep_alive_task = None
@@ -129,7 +132,7 @@ class Socket:
                 try:
                     async with self.receive_lock:
                         msg = await self.ws_connection.receive()
-                        self.logger.info(f"Realtime - received: {msg}")
+                        self.logger.debug(f"Realtime - received: {msg}")
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         data = msg.json()
                         if not isinstance(data, dict) or 'event' not in data:
@@ -168,7 +171,7 @@ class Socket:
         """
         while True:
             async with self.keep_alive_lock:
-                self.logger.debug('Realtime sending heartbeat...')
+                # self.logger.debug('Realtime sending heartbeat...')
                 try:
                     if self.ws_connection:
                         await self.ws_connection.send_json({
@@ -177,7 +180,7 @@ class Socket:
                             "payload": HEARTBEAT_PAYLOAD,
                             "ref": None,
                         })
-                    self.logger.debug('Realtime sent heartbeat')
+                    # self.logger.debug('Realtime sent heartbeat')
                     await asyncio.sleep(self.hb_interval)
                 except Exception as e:
                     self.logger.error(f"Error sending heartbeat: {e}")
