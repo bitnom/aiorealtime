@@ -129,11 +129,11 @@ class Socket:
                 try:
                     async with self.receive_lock:
                         msg = await self.ws_connection.receive()
-                        self.logger.debug(f"Realtime - received: {msg}")
+                        self.logger.info(f"Realtime - received: {msg}")
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         data = msg.json()
                         if not isinstance(data, dict) or 'event' not in data:
-                            self.logger.error(f"Received invalid message format: {data}")
+                            self.logger.warning(f"Received invalid message format: {data}")
                             continue
 
                         message = Message(**data)
@@ -168,7 +168,7 @@ class Socket:
         """
         while True:
             async with self.keep_alive_lock:
-                self.logger.info('Realtime sending heartbeat...')
+                self.logger.debug('Realtime sending heartbeat...')
                 try:
                     if self.ws_connection:
                         await self.ws_connection.send_json({
@@ -183,7 +183,7 @@ class Socket:
                     self.logger.error(f"Error sending heartbeat: {e}")
                     await self.close()
                     if self.auto_reconnect:
-                        self.logger.info("Connection with server closed, trying to reconnect...")
+                        self.logger.warning("Connection with server closed, trying to reconnect...")
                         await self.connect()
                     else:
                         self.logger.exception("Connection with the server closed.")
