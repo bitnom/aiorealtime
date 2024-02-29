@@ -19,7 +19,7 @@ logger.setLevel('DEBUG')
 
 
 class Socket:
-    def __init__(self, url: str, loop: Optional[asyncio.AbstractEventLoop] = None):
+    def __init__(self, url: str, loop: Optional[asyncio.AbstractEventLoop] = None, mock_disconnect: bool = False):
         self.url = url
         self.loop = loop or asyncio.get_event_loop()
         self.ws_connection: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -27,6 +27,7 @@ class Socket:
         self.channels: DefaultDict[str, List[Channel]] = defaultdict(list)
         self.session: aiohttp.ClientSession
         self.keep_alive_task = None
+        self.mock_disconnect: bool = mock_disconnect
 
     async def connect(self):
         """
@@ -52,7 +53,7 @@ class Socket:
         i = 0
         while True:
             i += 1
-            if i == 3:
+            if self.mock_disconnect and i == 3:
                 await self.disconnect()
             try:
                 # Check if the WebSocket connection is still open
