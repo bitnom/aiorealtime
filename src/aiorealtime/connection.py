@@ -14,8 +14,6 @@ from aiorealtime.message import HEARTBEAT_PAYLOAD, PHOENIX_CHANNEL, ChannelEvent
 from aiorealtime.utils import create_realtime_url, table_path_to_realtime
 
 
-
-
 class Socket:
     def __init__(
             self,
@@ -24,6 +22,7 @@ class Socket:
             mock_disconnect: bool = False,
             logger: Optional[logging.Logger] = None,
             log_level: Union[int, str] = 'INFO',
+            heartbeat_interval: Optional[float] = 5.0,
     ):
         self.url = url
         self.loop = loop or asyncio.get_event_loop()
@@ -38,6 +37,7 @@ class Socket:
         self.session: aiohttp.ClientSession
         self.keep_alive_task = None
         self.mock_disconnect: bool = mock_disconnect
+        self.heartbeat_interval: float = heartbeat_interval
 
     async def connect(self):
         """
@@ -54,7 +54,7 @@ class Socket:
             await self.session.close()  # Close the session if connection fails
             raise
 
-    async def _keep_alive(self, interval: float = 5.0):
+    async def _keep_alive(self):
         """
         Send a heartbeat message periodically to keep the WebSocket connection alive.
 
@@ -72,7 +72,7 @@ class Socket:
                     # raise NotConnectedError
                     await self.connect()
                     await self._rejoin_channels()
-                    await asyncio.sleep(interval)
+                    await asyncio.sleep(self.heartbeat_interval)
 
                 # Send the heartbeat message
                 await self.ws_connection.send_json({
@@ -84,10 +84,10 @@ class Socket:
                 self.logger.debug("Heartbeat message sent to keep the WebSocket connection alive.")
 
                 # Wait for the specified interval before sending the next heartbeat
-                await asyncio.sleep(interval)
+                await asyncio.sleep(self.heartbeat_interval)
             except asyncio.CancelledError:
                 # The keep-alive task was cancelled, likely due to a disconnect
-                self.logger.info("Keep-alive task cancelled.")
+                self.logger.warning("Keep-alive task cancelled.")
                 break
             except NotConnectedError:
                 pass
@@ -177,7 +177,7 @@ class Socket:
             print('Listener exception:', e)
         finally:
             self.logger.debug("Restarting listener")
-            #await self.disconnect()
+            # await self.disconnect()
             await asyncio.sleep(3)
             await self.listen()
 
@@ -189,7 +189,7 @@ async def callback1(payload):
 if __name__ == "__main__":
     # Example usage
     async def main():
-        api_url = "https://mmtkmitdhqjmfmmllvez.supabase.co"
+        api_url = "https://xxx.supabase.co"
         api_key = os.getenv('SUPABASE_API_KEY')
         s = Socket(create_realtime_url(api_url, api_key))
         try:
