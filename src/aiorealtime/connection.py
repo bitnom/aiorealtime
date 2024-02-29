@@ -13,17 +13,27 @@ from aiorealtime.exceptions import NotConnectedError
 from aiorealtime.message import HEARTBEAT_PAYLOAD, PHOENIX_CHANNEL, ChannelEvents, Message
 from aiorealtime.utils import create_realtime_url, table_path_to_realtime
 
-logging.basicConfig()
-logger = logging.getLogger(__name__)
-logger.setLevel('DEBUG')
+
 
 
 class Socket:
-    def __init__(self, url: str, loop: Optional[asyncio.AbstractEventLoop] = None, mock_disconnect: bool = False):
+    def __init__(
+            self,
+            url: str,
+            loop: Optional[asyncio.AbstractEventLoop] = None,
+            mock_disconnect: bool = False,
+            logger: Optional[logging.Logger] = None,
+            log_level: Union[int, str] = 'INFO',
+    ):
         self.url = url
         self.loop = loop or asyncio.get_event_loop()
         self.ws_connection: Optional[aiohttp.ClientWebSocketResponse] = None
-        self.logger = logging.getLogger(__name__)
+        if logger is None:
+            logging.basicConfig()
+            logger = logging.getLogger(__name__)
+            logger.setLevel(log_level)
+            logger = logging.getLogger(__name__)
+        self.logger = logger
         self.channels: DefaultDict[str, List[Channel]] = defaultdict(list)
         self.session: aiohttp.ClientSession
         self.keep_alive_task = None
@@ -118,11 +128,6 @@ class Socket:
         """
         Create a Channel instance associated with this Socket.
         """
-        # if reconnect:
-        #     for topic, channels in self.channels.items():
-        #         for chan in channels:
-        #             await chan.join()
-        #     return
         chan = Channel(self, topic=topic, params=params)
         self.channels[topic].append(chan)
         await chan.join()
