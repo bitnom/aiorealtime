@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, TYPE_CHECKING, NamedTuple
 
-from aiorealtime.types import Callback
+from aiorealtime.custom_types import Callback
 
 if TYPE_CHECKING:
     from aiorealtime.connection import Socket
