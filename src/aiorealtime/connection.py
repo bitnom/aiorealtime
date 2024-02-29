@@ -22,7 +22,7 @@ class Socket:
     def __init__(self, url: str, loop: Optional[asyncio.AbstractEventLoop] = None):
         self.url = url
         self.loop = loop or asyncio.get_event_loop()
-        self.ws_connection: aiohttp.ClientWebSocketResponse
+        self.ws_connection: Optional[aiohttp.ClientWebSocketResponse] = None
         self.logger = logging.getLogger(__name__)
         self.channels: DefaultDict[str, List[Channel]] = defaultdict(list)
         self.session: aiohttp.ClientSession
@@ -49,12 +49,19 @@ class Socket:
 
         :param interval: The interval in seconds between each heartbeat message.
         """
+        i = 0
         while True:
+            i += 1
+            if i == 3:
+                await self.disconnect()
             try:
                 # Check if the WebSocket connection is still open
                 if self.ws_connection is None or self.ws_connection.closed:
                     self.logger.info("_keep_alive detected closed WebSocket connection.")
-                    raise NotConnectedError
+                    # raise NotConnectedError
+                    await self.connect()
+                    await self._rejoin_channels()
+                    await asyncio.sleep(interval)
 
                 # Send the heartbeat message
                 await self.ws_connection.send_json({
@@ -72,6 +79,7 @@ class Socket:
                 self.logger.info("Keep-alive task cancelled.")
                 break
             except NotConnectedError:
+                pass
 
             except Exception as e:
                 self.logger.error(f"An error occurred while sending a heartbeat message: {e}")
@@ -109,15 +117,23 @@ class Socket:
         """
         Create a Channel instance associated with this Socket.
         """
-        if reconnect:
-            for topic, channels in self.channels.items():
-                for chan in channels:
-                    await chan.join()
-            return
+        # if reconnect:
+        #     for topic, channels in self.channels.items():
+        #         for chan in channels:
+        #             await chan.join()
+        #     return
         chan = Channel(self, topic=topic, params=params)
         self.channels[topic].append(chan)
         await chan.join()
         return chan
+
+    async def _rejoin_channels(self):
+        """
+        Rejoin all channels that were previously joined.
+        """
+        for topic, channels in self.channels.items():
+            for channel in channels:
+                await channel.join()
 
     async def listen(self):
         """
@@ -142,17 +158,22 @@ class Socket:
 
                     for channel in self.channels.get(message.topic, []):
                         if channel.joined:
-                            for cl in channel.listeners:
-                                if cl.event in ["*", message.event]:
-                                    await cl.callback(message.payload)
+                            callbacks = channel.listeners.get(message.event, []) + channel.listeners.get('*', [])
+                            for cl in callbacks:
+                                await cl.callback(message.payload)
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     self.logger.error(f"WebSocket connection closed with exception {self.ws_connection.exception()}")
                     break
         except asyncio.CancelledError:
             # The listen loop was cancelled, likely due to a disconnect
             self.logger.info("WebSocket listen loop cancelled.")
+        except Exception as e:
+            print('Listener exception:', e)
         finally:
-            await self.disconnect()
+            self.logger.debug("Restarting listener")
+            #await self.disconnect()
+            await asyncio.sleep(3)
+            await self.listen()
 
 
 async def callback1(payload):

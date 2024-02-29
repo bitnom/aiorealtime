@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, TYPE_CHECKING, NamedTuple
+from typing import List, TYPE_CHECKING, NamedTuple, Dict, Callable
 
 from aiorealtime.custom_types import Callback
 
@@ -33,7 +33,7 @@ class Channel:
         self.socket = socket
         self.params = params
         self.topic = topic
-        self.listeners: List[CallbackListener] = []
+        self.listeners: Dict[str, List[CallbackListener]] = {}
         self.joined = False
 
     async def join(self) -> 'Channel':
@@ -50,14 +50,15 @@ class Channel:
             self.socket.logger.error(f"Error joining channel '{self.topic}': {e}")
             raise
 
-    def on(self, event: str, callback: Callback) -> Channel:
+    def on(self, event: str, callback: Callable) -> Channel:
         """
         :param event: A specific event will have a specific callback
         :param callback: Callback that takes msg payload as its first argument
         :return: Channel
         """
-        cl = CallbackListener(event=event, callback=callback)
-        self.listeners.append(cl)
+        if event not in self.listeners:
+            self.listeners[event] = []
+        self.listeners[event].append(CallbackListener(event, callback))
         return self
 
     def off(self, event: str) -> None:
@@ -65,4 +66,5 @@ class Channel:
         :param event: Stop responding to a certain event
         :return: None
         """
-        self.listeners = [callback for callback in self.listeners if callback.event != event]
+        if event in self.listeners:
+            del self.listeners[event]
