@@ -1,5 +1,5 @@
 
-__version__ = "1.0.0"
+__version__ = "0.1.13"
 
 from aiorealtime.channel import CallbackListener, Channel
 from aiorealtime.connection import Socket
