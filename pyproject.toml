@@ -31,8 +31,8 @@ build-backend = "pdm.backend"
 
 [project]
 name = "aiorealtime"
-version = "1.0.0"
-description = ""
+version = "0.1.13"
+description = "Supabase Realtime client for asyncio, powered by AIOHTTP."
 authors = [
     {name = "bitnom", email = "14287229+bitnom@users.noreply.github.com"},
     {name = "bitnom"},
