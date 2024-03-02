@@ -23,15 +23,30 @@ class Socket:
             logger: Optional[logging.Logger] = None,
             log_level: Union[int, str] = 'INFO',
             heartbeat_interval: Optional[float] = 5.0,
+            log_file: str = 'socket.log',
     ):
         self.url = url
         self.loop = loop or asyncio.get_event_loop()
         self.ws_connection: Optional[aiohttp.ClientWebSocketResponse] = None
         if logger is None:
-            logging.basicConfig()
             logger = logging.getLogger(__name__)
-            logger.setLevel(log_level)
-            logger = logging.getLogger(__name__)
+
+        # Set up logging to both console and file
+        logger.setLevel(log_level)
+        # Console handler
+        ch = logging.StreamHandler()
+        ch.setLevel(log_level)
+        # File handler
+        fh = logging.FileHandler(log_file)
+        fh.setLevel(log_level)
+        # Formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        ch.setFormatter(formatter)
+        fh.setFormatter(formatter)
+        # Add handlers to the logger
+        logger.addHandler(ch)
+        logger.addHandler(fh)
+
         self.logger = logger
         self.channels: DefaultDict[str, List[Channel]] = defaultdict(list)
         self.session: aiohttp.ClientSession
