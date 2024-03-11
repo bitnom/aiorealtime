@@ -83,7 +83,7 @@ class Socket:
             try:
                 # Check if the WebSocket connection is still open
                 if self.ws_connection is None or self.ws_connection.closed:
-                    self.logger.info("_keep_alive detected closed WebSocket connection.")
+                    self.logger.warning("_keep_alive detected closed WebSocket connection.")
                     # raise NotConnectedError
                     await self.connect()
                     await self._rejoin_channels()
@@ -118,7 +118,7 @@ class Socket:
         if self.ws_connection:
             await self.ws_connection.close()
             self.ws_connection = None
-            self.logger.info(f"Disconnected from WebSocket at {self.url}")
+            self.logger.warning(f"Disconnected from WebSocket at {self.url}")
         if hasattr(self, 'session') and self.session:  # Check if the session exists and close it
             await self.session.close()
             self.session = None
@@ -165,7 +165,7 @@ class Socket:
         try:
             async for msg in self.ws_connection:
                 if msg.type == aiohttp.WSMsgType.TEXT:
-                    self.logger.info(f"Received message: {msg}")
+                    self.logger.debug(f"Received message: {msg}")
                     # Process the message here (e.g., dispatch to channel listeners)
                     data = msg.json()
                     if not isinstance(data, dict) or 'event' not in data:
@@ -187,7 +187,7 @@ class Socket:
                     break
         except asyncio.CancelledError:
             # The listen loop was cancelled, likely due to a disconnect
-            self.logger.info("WebSocket listen loop cancelled.")
+            self.logger.warning("WebSocket listen loop cancelled.")
         except Exception as e:
             print('Listener exception:', e)
         finally:
